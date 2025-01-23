@@ -6,28 +6,122 @@ import {
     FaMoon,
     FaSun,
     FaPause,
-    FaComments,
     FaPaperPlane,
     FaFastBackward,
+    FaExpand,
+    FaCompress,
+    FaChartBar,
+    FaCommentDots
 } from "react-icons/fa";
+import { io } from "socket.io-client";
+import { Tooltip } from 'react-tooltip'
 
 const API_BASE_URL = "http://localhost:5000";
+const socket = io("http://localhost:5000");
+
 
 const App = () => {
-    const [isDarkMode, setIsDarkMode] = useState(false);
+    const [isDarkMode, setIsDarkMode] = useState(true);
     const [segments, setSegments] = useState([]);
     const [currentBuffer, setCurrentBuffer] = useState([]);
     const [currentSegmentIndex, setCurrentSegmentIndex] = useState(0);
     const [isRecording, setIsRecording] = useState(false);
-    const [activeBox, setActiveBox] = useState(null);
+    const [activeBox, setActiveBox] = useState("B1");
+    const [isFlipped, setIsFlipped] = useState(false);
     const [isPlaying, setIsPlaying] = useState(false);
     const videoRef = useRef(null);
-    const [isChatOpen, setIsChatOpen] = useState(false);
-    const [chatMessages, setChatMessages] = useState([]);
+    const [chatMessages, setChatMessages] = useState([
+        { sender: "agent", text: "Hey, I am here to help you with the video. Ask me anything related to the strategies used in the game above." }
+    ]);
     const [chatInput, setChatInput] = useState("");
     const [isBuffering, setIsBuffering] = useState(true);
     const recognitionRef = useRef(null);
     const chatBodyRef = useRef(null);
+    const [isTheaterMode, setIsTheaterMode] = useState(false);
+    const sideBoxRef = useRef(null);
+    // eslint-disable-next-line
+    const [videoTime, setVideoTime] = useState(0);
+    const [playedSegments, setPlayedSegments] = useState([]);
+    const [isExpandMode, setIsExpandMode] = useState(false);
+
+
+    const handleToggle = (button) => {
+        setIsFlipped(true);
+        setTimeout(() => {
+            setActiveBox((prev) => (prev === "B1" ? "B2" : "B1"));
+            setIsFlipped(false);
+        }, 500);
+    };
+
+    const toggleExpandMode = () => {
+        setIsExpandMode(!isExpandMode);
+    };
+
+    useEffect(() => {
+        socket.on("initial-segment", (data) => {
+            const { currentSegmentIndex, currentSegments, currentVideoTime, isPlaying, playedSegments, currentSegmentName } = data;
+            setCurrentSegmentIndex(currentSegmentIndex);
+            setCurrentBuffer(currentSegments);
+            setIsPlaying(isPlaying);
+            setPlayedSegments(playedSegments);
+
+            if (videoRef.current) {
+                videoRef.current.currentTime = currentVideoTime;
+                if (isPlaying) {
+                    videoRef.current.play();
+                }
+
+                if (playedSegments && currentSegmentName) {
+                    if (!playedSegments.includes(currentSegmentName)) {
+                        videoRef.current.src = `${API_BASE_URL}/stream-segment?segmentName=${currentSegmentName}`
+                    }
+                }
+            }
+
+
+        })
+        socket.on("video-event", (data) => {
+            const video = videoRef.current;
+            if (video) {
+                console.log("event received", data);
+                if (data.type === "play") {
+                    video.play();
+                    setIsPlaying(true);
+                } else if (data.type === "pause") {
+                    video.pause();
+                    setIsPlaying(false);
+                } else if (data.type === "rewind") {
+                    video.currentTime = data.timestamp;
+                    setVideoTime(data.timestamp);
+                }
+            }
+        });
+        socket.on("segment-change", (data) => {
+            const { currentSegmentIndex, currentSegments, currentSegmentName } = data;
+            setCurrentSegmentIndex(currentSegmentIndex);
+            setCurrentBuffer(currentSegments);
+            if (videoRef.current && currentSegmentName) {
+                if (!playedSegments.includes(currentSegmentName)) {
+                    videoRef.current.src = `${API_BASE_URL}/stream-segment?segmentName=${currentSegmentName}`
+                }
+            }
+        })
+
+        return () => {
+            socket.off("initial-segment");
+            socket.off("video-event");
+            socket.off("segment-change");
+        };
+        // eslint-disable-next-line
+    }, [socket]);
+
+
+    const handleTimeUpdate = () => {
+        const video = videoRef.current;
+        if (video) {
+            setVideoTime(video.currentTime);
+        }
+    };
 
 
     useEffect(() => {
@@ -39,25 +133,24 @@ const App = () => {
             })
             .catch((err) => {
                 console.error("Error fetching segments:", err);
-              alert("Failed to load video segments.");
+                alert("Failed to load video segments.");
             });
     }, []);
 
     useEffect(() => {
-      const video = videoRef.current;
-      if (video) {
-          video.addEventListener("ended", handleSegmentEnd);
-          video.addEventListener("error", handleVideoError);
-      }
-      return () => {
-          if (video) {
-              video.removeEventListener("ended", handleSegmentEnd);
-            video.removeEventListener("error", handleVideoError);
-          }
-      };
-      // eslint-disable-next-line
+        const video = videoRef.current;
+        if (video) {
+            video.addEventListener("ended", handleSegmentEnd);
+            video.addEventListener("timeupdate", handleTimeUpdate);
+        }
+        return () => {
+            if (video) {
+                video.removeEventListener("ended", handleSegmentEnd);
+                video.removeEventListener("timeupdate", handleTimeUpdate);
+            }
+        };
+        // eslint-disable-next-line
     }, [currentSegmentIndex, currentBuffer]);
-
 
     useEffect(() => {
         if ("webkitSpeechRecognition" in window) {
@@ -76,8 +169,8 @@ const App = () => {
 
             recognitionRef.current.onerror = (event) => {
                 console.error("Speech recognition error:", event.error);
-                setIsRecording(false); 
-                alert("Speech recognition failed. Please try again."); 
+                setIsRecording(false);
+                alert("Speech recognition failed. Please try again.");
             };
 
             recognitionRef.current.onend = () => {
@@ -88,43 +181,16 @@ const App = () => {
         }
     }, []);
 
-
-     useEffect(() => {
+    useEffect(() => {
         if (chatBodyRef.current) {
-          chatBodyRef.current.scrollTop = chatBodyRef.current.scrollHeight;
+            chatBodyRef.current.scrollTop = chatBodyRef.current.scrollHeight;
         }
-      }, [chatMessages]);
+    }, [chatMessages]);
 
-
-    const handleVideoError = (error) => {
-      console.error("Video error:", error);
-        alert("Error loading video. Please try again."); 
-    }
-
-    const handleBoxToggle = (button) => {
-        if (activeBox === button) {
-            setActiveBox(null);
-        } else {
-            setActiveBox(button);
-        }
+    const toggleTheaterMode = () => {
+        setIsTheaterMode(!isTheaterMode);
     };
 
-    const toggleChat = () => {
-        setIsChatOpen(!isChatOpen);
-    };
-
-    const sendChatMessage = () => {
-        if (chatInput.trim()) {
-            const newMessage = { sender: "user", text: chatInput };
-            setChatMessages((prevMessages) => [...prevMessages, newMessage]);
-            setChatInput("");
-
-            setTimeout(() => {
-                const botReply = { sender: "bot", text: "I'm here to help!" };
-                setChatMessages((prevMessages) => [...prevMessages, botReply]);
-            }, 1000);
-        }
-    };
 
     const handlePlayPause = () => {
         const video = videoRef.current;
@@ -163,16 +229,16 @@ const App = () => {
         }
     };
 
-      const handleAudioInput = () => {
-    if (recognitionRef.current) {
-      if (isRecording) {
-        recognitionRef.current.stop();
-      } else {
-        setIsRecording(true);
-        recognitionRef.current.start();
-      }
-    }
-  };
+    const handleAudioInput = () => {
+        if (recognitionRef.current) {
+            if (isRecording) {
+                recognitionRef.current.stop();
+            } else {
+                setIsRecording(true);
+                recognitionRef.current.start();
+            }
+        }
+    };
 
     useEffect(() => {
         const bufferTimeout = setTimeout(() => {
@@ -181,116 +247,307 @@ const App = () => {
         return () => clearTimeout(bufferTimeout);
     }, []);
 
+    const saveSegment = async (videoBlob) => {
+        try {
+            const base64Data = await blobToBase64(videoBlob);
+            //   console.log("Base64 Data:", base64Data);
+
+            const requestBody = {
+                videoData: base64Data,
+            };
+            //   console.log("Request Body:", requestBody);
+
+            const response = await fetch(`${API_BASE_URL}/save-segment`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(requestBody),
+            });
+
+            const result = await response.json();
+            if (response.ok) {
+                console.log('Segment saved successfully:', result);
+                return result
+            } else {
+                console.error('Error saving segment:', result);
+                return {}
+            }
+        } catch (error) {
+            console.error('Error during save request:', error);
+            return {}
+        }
+    };
+
+    // Helper function to convert Blob to Base64
+    const blobToBase64 = (blob) => {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result);
+            reader.onerror = reject;
+            reader.readAsDataURL(blob);
+        });
+    };
+
+    const sendChatMessage = () => {
+        if (chatInput.trim()) {
+            const newMessage = { sender: "user", text: chatInput };
+            setChatMessages((prevMessages) => [...prevMessages, newMessage]);
+            if (chatInput.toLowerCase() === "record") {
+                handleRecording();
+            }
+            setChatInput("");
+            setTimeout(() => {
+                const botReply = { sender: "agent", text: "I'm here to help! Let me know if you have questions about the game." };
+                setChatMessages((prevMessages) => [...prevMessages, botReply]);
+            }, 1000);
+        }
+    };
+
+    const handleRecording = async () => {
+        const video = videoRef.current;
+        if (video) {
+            const currentTime = video.currentTime;
+            const segmentDuration = 10;
+            const videoElement = document.createElement("video");
+            videoElement.src = video.src;
+            videoElement.crossOrigin = "anonymous";
+
+            const stream = videoElement.captureStream();
+            const mediaRecorder = new MediaRecorder(stream);
+            let chunks = [];
+            mediaRecorder.ondataavailable = (e) => {
+                chunks.push(e.data);
+            };
+            mediaRecorder.onstop = async () => {
+                const videoBlob = new Blob(chunks, { type: "video/mp4" });
+                console.log("Captured videoBlob:", videoBlob.size, videoBlob.type);
+
+                const saveMessage = await saveSegment(videoBlob);
+                // console.log(".....................saveMessage...................", saveMessage)
+                if (saveMessage) {
+                    const latestVideoFile = await fetchLatestVideo();
+                    // console.log("......................latestVideoFile.................", latestVideoFile)
+                    if (latestVideoFile) {
+                        const newMessage = {
+                            sender: "agent",
+                            text: "",
+                            videoUrl: `${API_BASE_URL}/saved_segments/${latestVideoFile}`,
+                        };
+                        // console.log("...........newMessage.........", newMessage)
+                        setChatMessages((prevMessages) => [...prevMessages, newMessage]);
+                    }
+                }
+            };
+            videoElement.currentTime = currentTime;
+            videoElement.onseeked = () => {
+                mediaRecorder.start();
+                videoElement.play();
+            };
+            setTimeout(() => {
+                mediaRecorder.stop();
+                videoElement.pause();
+            }, segmentDuration * 1000);
+        }
+    };
+
+    // Function to fetch the latest saved video
+    const fetchLatestVideo = async () => {
+        try {
+            const response = await fetch(`${API_BASE_URL}/get-latest-video`);
+            if (response.ok) {
+                const videoData = await response.json();
+                console.log(videoData.latestVideoFile);
+                return videoData.latestVideoFile;
+            } else {
+                console.error("Error fetching the latest video");
+            }
+        } catch (error) {
+            console.error("Error fetching the latest video:", error);
+        }
+
+        return null;
+    };
+
+
+    const getTooltipId = () => {
+        return activeBox === 'B1' ? 'statistics-tooltip' : 'commentary-tooltip';
+    };
+
+    const getTooltipContent = () => {
+        return activeBox === 'B1' ? 'Click for Statistics' : 'Click for Commentary';
+    };
+
+
     return (
         <div className={`app-container ${isDarkMode ? "dark" : "light"}`}>
+            <h5 className={`app-name ${isDarkMode ? "dark" : "light"}`}>BaseBall Insights</h5>
             <button
                 className="theme-toggle"
                 onClick={() => setIsDarkMode(!isDarkMode)}
-                 aria-label={isDarkMode ? "Switch to light mode" : "Switch to dark mode"}
-            >
+                aria-label={
+                    isDarkMode ? "Switch to light mode" : "Switch to dark mode"
+                }>
                 {isDarkMode ? <FaSun /> : <FaMoon />}
             </button>
-
-            <div className="video-section">
-              <div className="buffering-container" style={{ display: isBuffering ? 'block' : 'none' }}>
-                  <div className="buffering-icon"></div>
-              </div>
-                <video
-                  ref={videoRef}
-                  autoPlay={!isBuffering}
-                  src={currentBuffer[currentSegmentIndex] ? `${API_BASE_URL}/stream-segment?segmentName=${currentBuffer[currentSegmentIndex]}` : ""}
-                  key={currentBuffer[currentSegmentIndex]}
-                  className="react-player"
-                  onPlay={() => setIsPlaying(true)}
-                  onPause={() => setIsPlaying(false)}
-                />
-              {!currentBuffer[currentSegmentIndex] && <p>Loading video...</p>}
-              <div className="video-buttons" disabled={isBuffering}>
-                {["B1", "B2", "B3", "B4"].map((button) => (
-                  <button
-                    key={button}
-                    onClick={() => handleBoxToggle(button)}
-                    aria-label={`Toggle ${button} box`}
-                  >
-                    {button}
-                  </button>
-                ))}
-              </div>
-                <button className="pause-play" onClick={handlePlayPause} disabled={isBuffering} aria-label={isPlaying ? "Pause" : "Play"}>
-                    {isPlaying ? <FaPause /> : <FaPlay />}
-                </button>
-                <button className="pause-play2" onClick={handleRewind} disabled={isBuffering} aria-label="Rewind 10 seconds">
-                    <FaFastBackward />
-                </button>
-            </div>
-
-            {activeBox && (
-                <div className="side-box">
-                    <h3>{activeBox} Content</h3>
-                    <div className="side-box-content">
-                        <p>
-                            This is the content for {activeBox}. Add more information or
-                            elements as needed.
-                        </p>
-                        <p>
-                            You can make this box scrollable if the content is long. Keep
-                            adding more details here.
-                        </p>
-                        <p>Lorem ipsum dolor sit amet, consectetur adipiscing elit.</p>
-                        <p>Vivamus lacinia odio vitae vestibulum vestibulum.</p>
-                    </div>
+            <div className={`video-section ${isTheaterMode ? "theater-mode" : ""}`}>
+                <div
+                    className="buffering-container"
+                    style={{ display: isBuffering ? "block" : "none" }}>
+                    <div className="buffering-icon"></div>
                 </div>
-            )}
+                <div className="video-and-button">
+                    <video
+                        ref={videoRef}
+                        autoPlay={!isBuffering}
+                        src={
+                            currentBuffer[currentSegmentIndex]
+                                ? `${API_BASE_URL}/stream-segment?segmentName=${currentBuffer[currentSegmentIndex]}`
+                                : ""
+                        }
+                        key={currentBuffer[currentSegmentIndex]}
+                        className="react-player"
+                        onPlay={() => setIsPlaying(true)}
+                        onPause={() => setIsPlaying(false)}
+                    />
 
-            {isChatOpen && (
-                <div className="chatbot-window">
-                    <div className="chatbot-header">
-                        <span>Chatbot</span>
-                        <button onClick={toggleChat} aria-label="Close chat">×</button>
-                    </div>
-                    <div className="chatbot-body" ref={chatBodyRef}>
-                        {chatMessages.map((message, index) => (
-                            <div
-                                key={index}
-                                className={`chat-message ${message.sender === "user" ? "user-message" : "bot-message"}`}>
-                                {message.text}
-                            </div>
-                        ))}
-                    </div>
-                    <div className="chatbot-input">
-                        <input
-                            type="text"
-                            value={chatInput}
-                            onChange={(e) => setChatInput(e.target.value)}
-                            placeholder="Type a message..."
-                            disabled={isBuffering}
-                            aria-label="Chat input"
-                        />
-                         <button
-                           className={`audio ${isRecording ? "recording" : ""}`}
-                           onClick={handleAudioInput}
-                           disabled={isBuffering}
-                            aria-label={isRecording ? "Stop recording" : "Start recording"}
-                       >
-                           <FaMicrophone />
-                       </button>
+                    <div className="video-controls">
                         <button
-                            className="plane"
-                            onClick={sendChatMessage}
+                            className={`pause-play ${isTheaterMode ? "theater-mode" : ""}`}
+                            onClick={handlePlayPause}
                             disabled={isBuffering}
-                            aria-label="Send message"
-                        >
-                            <FaPaperPlane />
+                            aria-label={isPlaying ? "Pause" : "Play"}>
+                            {isPlaying ? <FaPause /> : <FaPlay />}
+                        </button>
+                        <button
+                            className={`rewind ${isTheaterMode ? "theater-mode" : ""}`}
+                            onClick={handleRewind}
+                            disabled={isBuffering}
+                            aria-label="Rewind 10 seconds">
+                            <FaFastBackward />
+                        </button>
+                        <button
+                            className={`theater-toggle ${isTheaterMode ? "theater-mode" : ""}`}
+                            onClick={toggleTheaterMode}
+                            disabled={isBuffering}
+                            aria-label={
+                                isTheaterMode ? "Exit Theater Mode" : "Enter Theater Mode"
+                            }>
+                            {isTheaterMode ? <FaCompress /> : <FaExpand />}
                         </button>
                     </div>
                 </div>
+
+                {!currentBuffer[currentSegmentIndex] && <p>Loading video...</p>}
+
+            </div>
+
+            {activeBox && (
+                <div
+                    ref={sideBoxRef}
+                    className={`side-box ${isDarkMode ? "dark" : "light"} ${isTheaterMode ? "theater-mode" : ""
+                        } ${isFlipped ? "flipping" : ""}`}
+                >
+                    {!isFlipped && (
+                        <div className="side-box-content">
+                            <button
+                                onClick={handleToggle}
+                                aria-label="Toggle content"
+                                className={`toggle-button ${isDarkMode ? 'dark' : 'light'}`}
+                                disabled={isBuffering}
+                                data-tooltip-id={getTooltipId()}
+                            >
+                                {activeBox === 'B1' ? <FaChartBar /> : <FaCommentDots />}
+                            </button>
+                            <Tooltip id={getTooltipId()} place="bottom-end" content={getTooltipContent()} />
+                            <h3>{activeBox} Content</h3>
+                            <p>
+                                This is the content for {activeBox}. Add more information or elements
+                                as needed.
+                            </p>
+                            <p>
+                                You can make this box scrollable if the content is long. Keep adding
+                                more details here.
+                            </p>
+                            <p>Lorem ipsum dolor sit amet, consectetur adipiscing elit.</p>
+                            <p>Vivamus lacinia odio vitae vestibulum vestibulum.</p>
+                        </div>
+                    )}
+                </div>
             )}
 
-            <button className="chatbot-toggle" onClick={toggleChat} disabled={isBuffering} aria-label="Open Chat">
-                <FaComments />
-            </button>
+
+            <div className={`conversation-box ${isExpandMode ? "expand-mode" : ""}`}>
+                <div className="conversation-header">
+                    <span>Agent Chat</span>
+                    <button onClick={toggleExpandMode} disabled={isBuffering} className={`expand-button ${isExpandMode ? "expand-mode" : ""}`}>
+                        {isExpandMode ? <FaCompress /> : <FaExpand />}
+                    </button>
+                </div>
+                <div className={`conversation-body ${isExpandMode ? "expand-mode" : ""}`} ref={chatBodyRef}>
+                    {chatMessages.map((message, index) => (
+                        <div
+                            key={index}
+                            className={`chat-message ${message.sender === "user" ? "user-message" : "agent-message"
+                                }`}>
+                            {message.text}
+                            {/* {console.log("Displaying video with URL:", message)} */}
+                            {message.videoUrl && (
+                                <video
+                                    controls
+                                    width="300"
+                                    src={message.videoUrl}
+                                    onError={() => console.error("Error loading video")}
+                                    className="small-video"
+                                />
+                            )}
+                        </div>
+                    ))}
+                    {/* Typing dots for agent */}
+                    <div className="chat-message agent-message typing-dots">
+                        <span></span>
+                        <span></span>
+                        <span></span>
+                    </div>
+                </div>
+                <div className="conversation-input">
+                    <input
+                        type="text"
+                        value={chatInput}
+                        className="styled-input"
+                        onChange={(e) => setChatInput(e.target.value)}
+                        placeholder="Type your question..."
+                        disabled={isBuffering}
+                        aria-label="Chat input"
+                        onKeyDown={(e) => {
+                            if (e.key === "Enter" && !isBuffering && chatInput.trim() !== "") {
+                                sendChatMessage();
+                            }
+                        }}
+                    />
+                    <button
+                        className={`audio ${isRecording ? "recording" : ""}`}
+                        onClick={handleAudioInput}
+                        disabled={isBuffering}
+                        aria-label={isRecording ? "Stop recording" : "Start recording"}>
+                        <FaMicrophone />
+                    </button>
+                    <button
+                        className="plane"
+                        onClick={sendChatMessage}
+                        disabled={isBuffering || chatInput.trim() === ""}
+                        aria-label="Send message">
+                        <FaPaperPlane />
+                    </button>
+                </div>
+            </div>
+
         </div>
     );
 };
 
 export default App;
+
+
+
+
